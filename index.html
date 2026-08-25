@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>支付管理系统</title>
+<script src="lib/chart.umd.min.js"></script>
+<script src="lib/xlsx.full.min.js"></script>
+<script src="ocr/tesseract.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+html { -webkit-text-size-adjust:100%; }
+body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:#f0f2f5; color:#1f2329; overflow-x:hidden; }
+.header { background:linear-gradient(135deg,#1677ff,#0958d9); color:#fff; padding:20px 32px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,.15); }
+.header h1 { font-size:22px; }
+.header .sub { font-size:13px; opacity:.85; margin-top:4px; }
+.container { max-width:1280px; margin:0 auto; padding:24px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:24px; }
+.card { background:#fff; border-radius:10px; padding:20px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+.card .label { font-size:13px; color:#8c8c8c; }
+.card .value { font-size:26px; font-weight:700; margin-top:6px; color:#1677ff; }
+.card .value.green { color:#52c41a; }
+.upload-box { background:#fff; border:2px dashed #d9d9d9; border-radius:10px; padding:40px; text-align:center; cursor:pointer; transition:.2s; margin-bottom:24px; }
+.upload-box:hover,.upload-box.drag { border-color:#1677ff; background:#f0f7ff; }
+.upload-box .icon { font-size:40px; }
+.upload-box p { margin-top:8px; color:#595959; }
+.upload-box .hint { font-size:12px; color:#8c8c8c; margin-top:4px; }
+#fileInput { display:none; }
+.ocr-queue { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:12px; margin-bottom:24px; }
+.ocr-item { background:#fff; border-radius:8px; padding:8px; box-shadow:0 1px 4px rgba(0,0,0,.08); text-align:center; }
+.ocr-item img { width:100%; height:110px; object-fit:cover; border-radius:4px; }
+.ocr-item .status { font-size:12px; margin-top:6px; color:#8c8c8c; word-break:break-all; }
+.ocr-item .status.ok { color:#52c41a; }
+.ocr-item .status.err { color:#ff4d4f; }
+.progress-bar { height:4px; background:#f0f0f0; border-radius:2px; margin-top:6px; overflow:hidden; }
+.progress-bar div { height:100%; background:#1677ff; width:0; transition:.3s; }
+.panel { background:#fff; border-radius:10px; padding:20px; box-shadow:0 1px 4px rgba(0,0,0,.08); margin-bottom:24px; }
+.panel h2 { font-size:16px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; }
+.toolbar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.toolbar input,.toolbar select { padding:6px 10px; border:1px solid #d9d9d9; border-radius:6px; font-size:13px; }
+.btn { padding:6px 14px; border:none; border-radius:6px; cursor:pointer; font-size:13px; background:#1677ff; color:#fff; }
+.btn:hover { background:#0958d9; }
+.btn.green { background:#52c41a; } .btn.green:hover { background:#389e0d; }
+.btn.gray { background:#8c8c8c; } .btn.gray:hover { background:#595959; }
+.btn.red { background:#ff4d4f; } .btn.red:hover { background:#d9363e; }
+table { width:100%; border-collapse:collapse; font-size:13px; }
+th { background:#fafafa; padding:10px 8px; text-align:left; border-bottom:2px solid #f0f0f0; white-space:nowrap; }
+td { padding:8px; border-bottom:1px solid #f0f0f0; }
+tr:hover td { background:#f5f9ff; }
+td[contenteditable] { outline:none; cursor:text; }
+td[contenteditable]:focus { background:#e6f4ff !important; box-shadow:0 0 0 2px #91caff inset; }
+.amount { color:#fa541c; font-weight:700; white-space:nowrap; }
+.empty { text-align:center; color:#8c8c8c; padding:40px; }
+.charts { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.charts .panel { height:340px; position:relative; }
+.charts .panel.wide { grid-column:1 / -1; }
+canvas { max-height:270px; }
+.thumb { width:36px; height:36px; object-fit:cover; border-radius:4px; cursor:pointer; }
+.toast { position:fixed; top:20px; left:50%; transform:translateX(-50%); background:#fff; padding:10px 20px; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.15); font-size:14px; display:none; z-index:99; }
+.img-modal { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; align-items:center; justify-content:center; z-index:98; }
+.img-modal img { max-width:92%; max-height:92%; border-radius:8px; }
+@media (max-width:768px){ .charts{grid-template-columns:1fr;} .container{padding:12px;} }
+@media (max-width:768px){
+  .header { flex-direction:column; align-items:stretch; padding:14px 16px; padding-top:calc(14px + env(safe-area-inset-top)); gap:12px; }
+  .header h1 { font-size:19px; }
+  .header .toolbar { display:flex; }
+  .header .toolbar .btn { flex:1; padding:10px 0; font-size:14px; }
+  .container { padding:12px; }
+  .cards { grid-template-columns:repeat(2,1fr); gap:10px; margin-bottom:16px; }
+  .card { padding:14px; border-radius:8px; }
+  .card .label { font-size:12px; }
+  .card .value { font-size:20px; }
+  .upload-box { padding:22px 14px; margin-bottom:16px; }
+  .upload-box .icon { font-size:30px; }
+  .upload-box p { font-size:14px; }
+  .ocr-queue { grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:16px; }
+  .ocr-item img { height:70px; }
+  .ocr-item .status { font-size:10px; }
+  .panel { padding:14px; border-radius:8px; margin-bottom:16px; }
+  .panel h2 { font-size:15px; flex-direction:column; align-items:stretch; }
+  .toolbar { width:100%; }
+  .toolbar input,.toolbar select { width:100%; min-height:38px; font-size:16px; padding:8px 12px; }
+  .toolbar .btn { min-height:38px; padding:8px 14px; font-size:14px; }
+  .btn { padding:9px 16px; font-size:14px; }
+  table, tbody, tr, td { display:block; width:100%; }
+  thead { display:none; }
+  table { background:transparent; }
+  tbody tr { background:#fff; border:1px solid #f0f0f0; border-radius:10px; margin-bottom:12px; padding:12px 14px; box-shadow:0 1px 4px rgba(0,0,0,.06); position:relative; }
+  tbody tr:active { background:#f5f9ff; }
+  td { display:flex; align-items:center; justify-content:space-between; gap:12px; border:none; border-bottom:1px dashed #f0f0f0; padding:9px 0; font-size:15px; min-height:40px; }
+  td:last-child { border-bottom:none; justify-content:flex-end; }
+  td::before { content:attr(data-label); flex-shrink:0; font-size:12px; color:#8c8c8c; font-weight:600; }
+  td[data-label="图片"]::before { display:none; }
+  td[data-label="图片"] { position:absolute; top:10px; right:12px; border:none; padding:0; min-height:0; }
+  td[data-label="金额(元)"] .amt, td.amount { font-size:18px; }
+  td[contenteditable] { flex:1; text-align:right; min-height:28px; word-break:break-all; }
+  td[data-label="图片"] .thumb { width:52px; height:52px; }
+  .btn.red { padding:7px 18px; }
+  .empty { padding:28px; font-size:14px; }
+  .charts { grid-template-columns:1fr; gap:12px; }
+  .charts .panel { height:280px; }
+  canvas { max-height:210px; }
+  .toast { width:88%; text-align:center; top:auto; bottom:calc(24px + env(safe-area-inset-bottom)); }
+  .img-modal img { max-width:96%; max-height:80%; }
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <div><h1>💳 支付管理系统</h1><div class="sub">上传支付截图 → 自动识别 → 生成报表</div></div>
+  <div class="toolbar">
+    <button class="btn green" onclick="exportExcel()">📥 导出Excel报表</button>
+    <button class="btn red" onclick="clearAll()">🗑 清空数据</button>
+  </div>
+</div>
+<div class="container">
+  <div class="cards">
+    <div class="card"><div class="label">总笔数</div><div class="value" id="stCount">0</div></div>
+    <div class="card"><div class="label">总金额（元）</div><div class="value" id="stTotal">0.00</div></div>
+    <div class="card"><div class="label">本月笔数</div><div class="value green" id="stMonthCnt">0</div></div>
+    <div class="card"><div class="label">本月金额（元）</div><div class="value green" id="stMonthSum">0.00</div></div>
+  </div>
+
+  <div class="upload-box" id="uploadBox">
+    <div class="icon">🖼️</div>
+    <p>点击或拖拽支付截图到此处（支持多张，支付宝 / 微信 / 银行App均可）</p>
+    <div class="hint">图片仅在本地浏览器识别，不会上传到任何服务器</div>
+  </div>
+  <input type="file" id="fileInput" accept="image/*" multiple>
+  <div class="ocr-queue" id="ocrQueue"></div>
+
+  <div class="panel">
+    <h2>📋 支付明细
+      <div class="toolbar">
+        <select id="filterMonth"><option value="">全部月份</option></select>
+        <select id="filterMethod"><option value="">全部方式</option></select>
+        <input id="searchBox" placeholder="🔍 搜索收款方/备注/订单号">
+        <button class="btn gray" onclick="addManual()">➕ 手动添加</button>
+      </div>
+    </h2>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>缩略图</th><th>日期时间</th><th>收款/付款方</th><th>金额(元)</th><th>收/支</th><th>支付方式</th><th>备注/订单号</th><th>操作</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    </div>
+    <div class="empty" id="emptyTip">暂无数据，先上传一张支付截图试试</div>
+  </div>
+
+  <div class="charts">
+    <div class="panel wide"><h2>📈 月度支付趋势</h2><canvas id="chartMonth"></canvas></div>
+    <div class="panel"><h2>🥧 支付方式分布</h2><canvas id="chartMethod"></canvas></div>
+    <div class="panel"><h2>🏆 收款方 Top8</h2><canvas id="chartPayee"></canvas></div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="img-modal" id="imgModal" onclick="this.style.display='none'"><img id="imgModalImg"></div>
+
+<script>
+let records = JSON.parse(localStorage.getItem('pay_records') || '[]');
+let chartMonth, chartMethod, chartPayee;
+const $ = id => document.getElementById(id);
+
+function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',2500); }
+function save(){ localStorage.setItem('pay_records', JSON.stringify(records)); }
+
+$('uploadBox').onclick = () => $('fileInput').click();
+$('uploadBox').ondragover = e => { e.preventDefault(); $('uploadBox').classList.add('drag'); };
+$('uploadBox').ondragleave = () => $('uploadBox').classList.remove('drag');
+$('uploadBox').ondrop = e => { e.preventDefault(); $('uploadBox').classList.remove('drag'); handleFiles(e.dataTransfer.files); };
+$('fileInput').onchange = e => { handleFiles(e.target.files); e.target.value=''; };
+
+let currentItem = null;
+async function handleFiles(files){
+  const imgs = [...files].filter(f => f.type.startsWith('image/'));
+  if(!imgs.length) return;
+  if(typeof Tesseract === 'undefined'){ toast('识别引擎加载失败，请刷新页面重试'); return; }
+  if(location.protocol === 'file:'){ toast('本地文件打开无法识别，请通过网站访问'); }
+  toast('开始识别 ' + imgs.length + ' 张图片…');
+  let worker;
+  try {
+    worker = await Tesseract.createWorker('chi_sim+eng', 1, {
+      workerPath: 'ocr/worker.min.js',
+      corePath: 'ocr/core',
+      langPath: 'ocr/lang',
+      gzip: false,
+      logger: m => { if(m.status === 'recognizing text' && currentItem){ const b = currentItem.querySelector('.progress-bar div'); if(b) b.style.width = Math.round(m.progress*100) + '%'; } }
+    });
+  } catch(e){ toast('OCR引擎初始化失败：' + e.message); return; }
+  for(const f of imgs){
+    const item = document.createElement('div');
+    item.className = 'ocr-item';
+    const url = URL.createObjectURL(f);
+    item.innerHTML = '<img src="'+url+'"><div class="status">排队中…</div><div class="progress-bar"><div></div></div>';
+    $('ocrQueue').prepend(item);
+    currentItem = item;
+    try{
+      const { data } = await worker.recognize(f);
+      const rec = parsePayment(data.text || '', data.confidence || 0);
+      rec.img = url;
+      records.unshift(rec);
+      item.querySelector('.status').textContent = '✓ ' + (rec.amount ? '¥'+rec.amount : '已识别(无金额)');
+      item.querySelector('.status').className = 'status ok';
+    }catch(err){
+      item.querySelector('.status').textContent = '✗ 识别失败：' + (err.message || '未知错误');
+      item.querySelector('.status').className = 'status err';
+    }
+    currentItem = null;
+    const pb = item.querySelector('.progress-bar');
+    if(pb) pb.remove();
+  }
+  await worker.terminate();
+  save(); render();
+  toast('识别完成！');
+}
+
+function parsePayment(text, conf){
+  const t = text.replace(/\s+/g, ' ');
+  const rec = { id: Date.now()+'_'+Math.random().toString(36).slice(2,7), date:'', time:'', payee:'', amount:0, direction:'支出', method:'', memo:'', orderNo:'', conf: Math.round(conf), raw: (text||'').slice(0,600) };
+  let m;
+  const amtPats = [
+    /(?:实付|付款金额|支付金额|订单金额|充值金额|转账金额|金额)[^\d¥￥]{0,6}[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)/,
+    /[¥￥]\s*([\d,]+(?:\.\d{1,2})?)/,
+    /([\d,]+\.\d{2})\s*元/
+  ];
+  for(const p of amtPats){ if((m = t.match(p))){ rec.amount = parseFloat(m[1].replace(/,/g,'')); break; } }
+  if((m = t.match(/(\d{4})[-/年.](\d{1,2})[-/月.](\d{1,2})/))){
+    rec.date = m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0');
+  } else if((m = t.match(/(\d{1,2})[-/月](\d{1,2})/))){
+    const y = new Date().getFullYear();
+    rec.date = y+'-'+String(m[1]).padStart(2,'0')+'-'+String(m[2]).padStart(2,'0');
+  } else { rec.date = new Date().toISOString().slice(0,10); }
+  if((m = t.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?/))){ rec.time = m[0]; }
+  const payeePats = [/收款方(?:名称)?[:：]?\s*([^\s,，。;；]{2,20})/, /付款方(?:名称)?[:：]?\s*([^\s,，。;；]{2,20})/, /向\s*([^\s,，。]{2,20}?)\s*转账/, /转账给\s*([^\s,，。]{2,20})/, /商家(?:全称)?[:：]?\s*([^\s,，。;；]{2,25})/, /商户(?!单号|编号)(?:名称)?[:：]?\s*([^\s,，。;；]{2,25})/];
+  for(const p of payeePats){
+    if((m = t.match(p))){
+      const v = m[1];
+      if(!/^(时间|方式|说明|单号|金额|日期|全称)$/.test(v)){ rec.payee = v; break; }
+    }
+  }
+  if(/收款方/.test(t) && !/付款方/.test(t)) rec.direction = '收入';
+  if(/退款|退款成功/.test(t)) rec.direction = '收入';
+  const methods = ['花呗','余额宝','余额','零钱','零钱通','银行卡','信用卡','招商银行','工商银行','建设银行','农业银行','中国银行','交通银行','邮储银行','支付宝','微信支付','云闪付','数字人民币'];
+  for(const k of methods){ if(t.includes(k)){ rec.method = k; break; } }
+  if((m = t.match(/(?:尾号|储蓄卡|信用卡)\s*(\d{4})/))){ rec.method = (rec.method||'银行卡') + '(*'+m[1]+')'; }
+  if((m = t.match(/(?:订单号|交易单号|交易号|商户单号)[^\d]{0,4}(\d{8,32})/))){ rec.orderNo = m[1]; }
+  if((m = t.match(/(?:备注|说明|商品说明)[:：]?\s*([^\s]{2,30})/))){ rec.memo = m[1]; }
+  if(!rec.memo && rec.orderNo) rec.memo = rec.orderNo;
+  return rec;
+}
+
+function monthKey(r){ return (r.date||'').slice(0,7); }
+function filtered(){
+  const fm = $('filterMonth').value, fmd = $('filterMethod').value, kw = $('searchBox').value.trim().toLowerCase();
+  return records.filter(r => (!fm || monthKey(r)===fm) && (!fmd || r.method===fmd) && (!kw || (r.payee+' '+r.memo+' '+r.orderNo).toLowerCase().includes(kw)));
+}
+
+function render(){
+  const list = filtered();
+  const tb = $('tbody');
+  tb.innerHTML = '';
+  list.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = '<td data-label="图片">'+(r.img ? '<img class="thumb" src="'+r.img+'" onclick="showImg(this.src)">' : '—')+'</td>'
+      + '<td data-label="日期时间" contenteditable data-f="date">'+(r.date||'')+(r.time?' '+r.time:'')+'</td>'
+      + '<td data-label="收款/付款方" contenteditable data-f="payee">'+(r.payee||'—')+'</td>'
+      + '<td data-label="金额(元)" contenteditable data-f="amount" class="amount">'+Number(r.amount||0).toFixed(2)+'</td>'
+      + '<td data-label="收/支" contenteditable data-f="direction">'+(r.direction||'')+'</td>'
+      + '<td data-label="支付方式" contenteditable data-f="method">'+(r.method||'—')+'</td>'
+      + '<td data-label="备注/订单号" contenteditable data-f="memo">'+(r.memo||'—')+'</td>'
+      + '<td data-label="操作"><button class="btn red" style="padding:5px 14px" onclick="delRec(\''+r.id+'\')">删除</button></td>';
+    tr.querySelectorAll('td[contenteditable]').forEach(td => {
+      td.onblur = () => {
+        const rec = records.find(x => x.id === r.id);
+        if(!rec) return;
+        const v = td.textContent.trim();
+        if(td.dataset.f === 'amount') rec.amount = parseFloat(v.replace(/[^\d.]/g,'')) || 0;
+        else if(td.dataset.f === 'date') { const parts = v.split(' '); rec.date = parts[0]; rec.time = parts[1]||''; }
+        else rec[td.dataset.f] = v;
+        save(); updateStats();
+      };
+    });
+    tb.appendChild(tr);
+  });
+  $('emptyTip').style.display = list.length ? 'none' : 'block';
+  updateStats(); updateFilters(); drawCharts();
+}
+
+function updateStats(){
+  const now = new Date().toISOString().slice(0,7);
+  $('stCount').textContent = records.length;
+  $('stTotal').textContent = records.reduce((s,r)=>s+(+r.amount||0),0).toFixed(2);
+  const m = records.filter(r=>monthKey(r)===now);
+  $('stMonthCnt').textContent = m.length;
+  $('stMonthSum').textContent = m.reduce((s,r)=>s+(+r.amount||0),0).toFixed(2);
+}
+
+function updateFilters(){
+  const months = [...new Set(records.map(monthKey).filter(Boolean))].sort().reverse();
+  const fm = $('filterMonth'), sel = fm.value;
+  fm.innerHTML = '<option value="">全部月份</option>' + months.map(m=>'<option'+(m===sel?' selected':'')+'>'+m+'</option>').join('');
+  const methods = [...new Set(records.map(r=>r.method).filter(Boolean))];
+  const fmd = $('filterMethod'), seld = fmd.value;
+  fmd.innerHTML = '<option value="">全部方式</option>' + methods.map(m=>'<option'+(m===seld?' selected':'')+'>'+m+'</option>').join('');
+}
+
+function drawCharts(){
+  const byMonth = {};
+  filtered().forEach(r => { const k = monthKey(r)||'未知'; byMonth[k] = (byMonth[k]||0) + (+r.amount||0); });
+  const mk = Object.keys(byMonth).sort();
+  const cm = $('chartMonth');
+  if(chartMonth) chartMonth.destroy();
+  chartMonth = new Chart(cm, { type:'line', data:{ labels:mk, datasets:[{ label:'支付金额(元)', data:mk.map(k=>byMonth[k].toFixed(2)), borderColor:'#1677ff', backgroundColor:'rgba(22,119,255,.15)', fill:true, tension:.3 }]}, options:{ maintainAspectRatio:false } });
+  const byMethod = {};
+  filtered().forEach(r => { const k = r.method||'未识别'; byMethod[k] = (byMethod[k]||0) + (+r.amount||0); });
+  if(chartMethod) chartMethod.destroy();
+  chartMethod = new Chart($('chartMethod'), { type:'doughnut', data:{ labels:Object.keys(byMethod), datasets:[{ data:Object.values(byMethod).map(v=>+v.toFixed(2)), backgroundColor:['#1677ff','#52c41a','#faad14','#fa541c','#722ed1','#13c2c2','#eb2f96','#8c8c8c'] }]}, options:{ maintainAspectRatio:false } });
+  const byPayee = {};
+  filtered().forEach(r => { const k = r.payee||'未识别'; byPayee[k] = (byPayee[k]||0) + (+r.amount||0); });
+  const top = Object.entries(byPayee).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  if(chartPayee) chartPayee.destroy();
+  chartPayee = new Chart($('chartPayee'), { type:'bar', data:{ labels:top.map(e=>e[0]), datasets:[{ label:'金额(元)', data:top.map(e=>e[1].toFixed(2)), backgroundColor:'#1677ff' }]}, options:{ maintainAspectRatio:false, indexAxis:'y' } });
+}
+
+['filterMonth','filterMethod'].forEach(id => $(id).onchange = render);
+$('searchBox').oninput = render;
+
+function delRec(id){ records = records.filter(r=>r.id!==id); save(); render(); }
+function showImg(src){ $('imgModalImg').src = src; $('imgModal').style.display='flex'; }
+function addManual(){
+  records.unshift({ id:Date.now()+'_'+Math.random().toString(36).slice(2,7), date:new Date().toISOString().slice(0,10), time:'', payee:'新记录', amount:0, direction:'支出', method:'', memo:'', orderNo:'', img:'' });
+  save(); render();
+}
+function clearAll(){
+  if(!records.length) return;
+  if(confirm('确定清空全部 '+records.length+' 条记录？此操作不可恢复！')){
+    records = []; save(); render(); toast('已清空');
+  }
+}
+
+function exportExcel(){
+  const list = filtered();
+  if(!list.length){ toast('没有可导出的数据'); return; }
+  const detail = list.map((r,i) => ({ '序号':i+1, '日期':r.date, '时间':r.time, '收款/付款方':r.payee, '金额(元)':+r.amount||0, '收/支':r.direction, '支付方式':r.method, '备注/订单号':r.memo, 'OCR置信度':r.conf||'' }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), '支付明细');
+  const byMonth = {};
+  list.forEach(r => { const k = monthKey(r)||'未知'; byMonth[k] = byMonth[k]||{count:0,sum:0}; byMonth[k].count++; byMonth[k].sum += +r.amount||0; });
+  const summary = Object.keys(byMonth).sort().map(k => ({ '月份':k, '笔数':byMonth[k].count, '金额(元)':+byMonth[k].sum.toFixed(2) }));
+  summary.push({ '月份':'合计', '笔数':list.length, '金额(元)':+list.reduce((s,r)=>s+(+r.amount||0),0).toFixed(2) });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summary), '月度汇总');
+  const byPayee = {};
+  list.forEach(r => { const k = r.payee||'未识别'; byPayee[k] = byPayee[k]||{count:0,sum:0}; byPayee[k].count++; byPayee[k].sum += +r.amount||0; });
+  const payeeRows = Object.entries(byPayee).sort((a,b)=>b[1].sum-a[1].sum).map(e => ({ '收款/付款方':e[0], '笔数':e[1].count, '金额(元)':+e[1].sum.toFixed(2) }));
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(payeeRows), '对方汇总');
+  XLSX.writeFile(wb, '支付报表_'+new Date().toISOString().slice(0,10)+'.xlsx');
+  toast('Excel 已导出');
+}
+
+render();
+</script>
+</body>
+</html>
