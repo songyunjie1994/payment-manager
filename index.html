@@ -200,7 +200,8 @@ td.exp { color:#fa541c; }
 <script>
 let records = JSON.parse(localStorage.getItem('pay_records') || '[]');
 function cleanImgs(){ records.forEach(r => { if(r.img && r.img.indexOf('data:') !== 0) r.img = ''; }); }
-cleanImgs();
+function ensureIds(){ records.forEach(function(r){ if(!r.id) r.id = Date.now() + '_' + Math.random().toString(36).slice(2,7); }); }
+cleanImgs(); ensureIds();
 const $ = id => document.getElementById(id);
 
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',2500); }
@@ -285,6 +286,7 @@ async function aiRecognize(file){
   if(!mm) throw new Error('AI未返回有效JSON');
   const d = JSON.parse(mm[0]);
   return {
+    id: Date.now() + '_' + Math.random().toString(36).slice(2,7),
     date: d.date || '', time: d.time || '', payee: d.payee || '', payer: d.payer || '', payerBank: d.payerBank || '', amount: parseFloat(d.amount) || 0,
     currency: (d.currency || 'CNY').toUpperCase(), direction: d.direction || '支出', method: d.method || '', orderNo: d.orderNo || '', memo: d.memo || ''
   };
@@ -533,7 +535,7 @@ async function doSync(){
     const localTime = +(localStorage.getItem('pay_updated') || 0);
     if(remote && remote.updated_at > localTime && !pending){
       records = remote.records || [];
-      cleanImgs();
+      cleanImgs(); ensureIds();
       localStorage.setItem('pay_records', JSON.stringify(records));
       localStorage.setItem('pay_updated', remote.updated_at);
       localStorage.removeItem('pay_pending');
