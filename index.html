@@ -546,7 +546,7 @@ function scheduleSync(){
 async function cloudApi(method, body, rawAccept){
   const headers = { 'Authorization': 'Bearer ' + SYNC.token, 'Accept': rawAccept ? 'application/vnd.github.raw' : 'application/vnd.github.json' };
   if(body) headers['Content-Type'] = 'application/json';
-  return await fetch('https://api.github.com/repos/' + SYNC.owner + '/' + SYNC.repo + '/contents/' + SYNC.path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+  return await fetch('https://api.github.com/repos/' + SYNC.owner + '/' + SYNC.repo + '/contents/' + SYNC.path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined, cache: 'no-store' });
 }
 async function doSync(){
   if(!syncEnabled() || syncing) return;
