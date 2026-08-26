@@ -152,7 +152,7 @@ canvas { max-height:270px; }
     </h2>
     <div style="overflow-x:auto">
     <table>
-      <thead><tr><th>缩略图</th><th>日期时间</th><th>收款/付款方</th><th>金额(元)</th><th>收/支</th><th>支付方式</th><th>备注/订单号</th><th>操作</th></tr></thead>
+      <thead><tr><th>缩略图</th><th>日期时间</th><th>收款方</th><th>付款方</th><th>金额</th><th>币种</th><th>收/支</th><th>支付方式</th><th>备注/订单号</th><th>操作</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
     </div>
@@ -187,7 +187,7 @@ canvas { max-height:270px; }
       <input id="aiModel" placeholder="glm-4v-flash">
       <label>API Key</label>
       <input id="aiKey" type="password" placeholder="粘贴你的 API Key">
-      <div class="tip">Key 仅保存在你自己的浏览器里，不会上传到任何服务器。<br>智谱免费Key注册：open.bigmodel.cn → 控制台 → API Keys</div>
+      <div class="tip">已内置公共Key（智谱免费模型，所有访客共享，有频率限制）。填写自己的Key可独享额度，仅保存在你自己的浏览器里。<br>免费注册：open.bigmodel.cn → 控制台 → API Keys</div>
     </div>
     <div class="actions">
       <button class="btn gray" onclick="closeSettings()">取消</button>
@@ -218,8 +218,10 @@ const AI_PRESETS = {
   siliconflow: { endpoint:'https://api.siliconflow.cn/v1/chat/completions', model:'Qwen/Qwen2.5-VL-32B-Instruct' },
   custom: { endpoint:'', model:'' }
 };
-const AI_PROMPT = '你是支付凭证识别助手。请从这张支付截图/银行回单/收据图片中提取信息，严格只输出一个JSON对象，不要输出任何其他文字：{"date":"YYYY-MM-DD","time":"HH:MM:SS","payee":"对方名称（支出时填收款人，收入时填付款人）","amount":数字金额,"direction":"支出或收入","method":"支付方式如零钱/银行卡/余额宝/招商银行","orderNo":"订单号或交易流水号或回单编号","memo":"备注或摘要或商品说明"}。金额只输出数字不带单位，无法识别的字段填空字符串。';
-let aiCfg = JSON.parse(localStorage.getItem('pay_ai_cfg') || '{"mode":"ai","preset":"zhipu","endpoint":"https://open.bigmodel.cn/api/paas/v4/chat/completions","model":"glm-4v-flash","key":""}');
+const AI_PROMPT = '你是支付凭证识别助手。请从这张支付截图/银行回单/收据图片中提取信息，严格只输出一个JSON对象，不要输出任何其他文字：{"date":"YYYY-MM-DD","time":"HH:MM:SS","payee":"收款方名称","payer":"付款方名称","amount":数字金额,"currency":"币种代码，如CNY/USD/EUR/JPY/HKD/GBP","direction":"支出或收入","method":"支付方式如零钱/银行卡/余额宝/招商银行","orderNo":"订单号或交易流水号或回单编号","memo":"备注或摘要或商品说明"}。金额只输出数字不带单位，无法识别的字段填空字符串。';
+const DEFAULT_AI_KEY = '2850c4bd97444eaf832119a49e23f54a.OojmSYrwr05W6qKm';
+let aiCfg = JSON.parse(localStorage.getItem('pay_ai_cfg') || 'null') || { mode:'ai', preset:'zhipu', endpoint:'https://open.bigmodel.cn/api/paas/v4/chat/completions', model:'glm-4v-flash', key: DEFAULT_AI_KEY };
+if(!aiCfg.key) aiCfg.key = DEFAULT_AI_KEY;
 
 function openSettings(){
   $('aiPreset').value = aiCfg.preset; $('aiEndpoint').value = aiCfg.endpoint; $('aiModel').value = aiCfg.model; $('aiKey').value = aiCfg.key;
@@ -238,10 +240,10 @@ function applyPreset(){
   $('aiEndpoint').value = p.endpoint; $('aiModel').value = p.model;
 }
 function saveSettings(){
-  aiCfg = { mode: $('settingsModal').dataset.mode || 'ai', preset: $('aiPreset').value, endpoint: $('aiEndpoint').value.trim(), model: $('aiModel').value.trim(), key: $('aiKey').value.trim() };
+  aiCfg = { mode: $('settingsModal').dataset.mode || 'ai', preset: $('aiPreset').value, endpoint: $('aiEndpoint').value.trim(), model: $('aiModel').value.trim(), key: $('aiKey').value.trim() || DEFAULT_AI_KEY };
   localStorage.setItem('pay_ai_cfg', JSON.stringify(aiCfg));
   closeSettings();
-  toast(aiCfg.mode==='ai' ? (aiCfg.key ? '已启用AI大模型识别' : '已选AI模式，但还没填API Key，将使用本地OCR') : '已切换为本地OCR识别');
+  toast(aiCfg.mode==='ai' ? '已启用AI大模型识别' : '已切换为本地OCR识别');
 }
 
 function fileToDataURL(file, maxSide){
@@ -276,8 +278,8 @@ async function aiRecognize(file){
   if(!mm) throw new Error('AI未返回有效JSON');
   const d = JSON.parse(mm[0]);
   return {
-    date: d.date || '', time: d.time || '', payee: d.payee || '', amount: parseFloat(d.amount) || 0,
-    direction: d.direction || '支出', method: d.method || '', orderNo: d.orderNo || '', memo: d.memo || ''
+    date: d.date || '', time: d.time || '', payee: d.payee || '', payer: d.payer || '', amount: parseFloat(d.amount) || 0,
+    currency: (d.currency || 'CNY').toUpperCase(), direction: d.direction || '支出', method: d.method || '', orderNo: d.orderNo || '', memo: d.memo || ''
   };
 }
 
@@ -337,7 +339,7 @@ async function handleFiles(files){
 function parsePayment(text, conf){
   let t = text.replace(/\s+/g, ' ');
   t = t.replace(/(\d)\s*,\s*(\d)/g, '$1,$2').replace(/(\d)\s*\.\s*(\d)/g, '$1.$2');
-  const rec = { id: Date.now()+'_'+Math.random().toString(36).slice(2,7), date:'', time:'', payee:'', amount:0, direction:'支出', method:'', memo:'', orderNo:'', conf: Math.round(conf), raw: (text||'').slice(0,600) };
+  const rec = { id: Date.now()+'_'+Math.random().toString(36).slice(2,7), date:'', time:'', payee:'', payer:'', amount:0, currency:'CNY', direction:'支出', method:'', memo:'', orderNo:'', conf: Math.round(conf), raw: (text||'').slice(0,600) };
   let m;
   const amtPats = [
     /(?:实付|付款金额|支付金额|订单金额|充值金额|转账金额|交易金额|金额)[^\d¥￥CNY]{0,6}(?:CNY|RMB|人民币)?[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)/,
@@ -377,6 +379,9 @@ function parsePayment(text, conf){
     }
   }
   rec.payee = rec.direction === '收入' ? (payerCand || payeeCand) : (payeeCand || payerCand);
+  rec.payer = payerCand;
+  const curPats = [[/USD|US\$|\$[^\d]/, 'USD'], [/EUR|€/, 'EUR'], [/JPY|日元|円/, 'JPY'], [/GBP|£|英镑/, 'GBP'], [/HKD|港币|HK\$/, 'HKD'], [/CNY|RMB|人民币|元|¥|￥/, 'CNY']];
+  for(const [p, c] of curPats){ if(p.test(t)){ rec.currency = c; break; } }
   const methods = ['花呗','余额宝','余额','零钱','零钱通','银行卡','信用卡','招商银行','工商银行','建设银行','农业银行','中国银行','交通银行','邮储银行','支付宝','微信支付','云闪付','数字人民币','移动支付','网银','转账'];
   for(const k of methods){ if(t.includes(k)){ rec.method = k; break; } }
   if((m = t.match(/(?:尾号|储蓄卡|信用卡)\s*(\d{4})/))){ rec.method = (rec.method||'银行卡') + '(*'+m[1]+')'; }
@@ -400,8 +405,10 @@ function render(){
     const tr = document.createElement('tr');
     tr.innerHTML = '<td data-label="图片">'+(r.img ? '<img class="thumb" src="'+r.img+'" onclick="showImg(this.src)">' : '—')+'</td>'
       + '<td data-label="日期时间" contenteditable data-f="date">'+(r.date||'')+(r.time?' '+r.time:'')+'</td>'
-      + '<td data-label="收款/付款方" contenteditable data-f="payee">'+(r.payee||'—')+'</td>'
-      + '<td data-label="金额(元)" contenteditable data-f="amount" class="amount">'+Number(r.amount||0).toFixed(2)+'</td>'
+      + '<td data-label="收款方" contenteditable data-f="payee">'+(r.payee||'—')+'</td>'
+      + '<td data-label="付款方" contenteditable data-f="payer">'+(r.payer||'—')+'</td>'
+      + '<td data-label="金额" contenteditable data-f="amount" class="amount">'+Number(r.amount||0).toFixed(2)+'</td>'
+      + '<td data-label="币种" contenteditable data-f="currency">'+(r.currency||'CNY')+'</td>'
       + '<td data-label="收/支" contenteditable data-f="direction">'+(r.direction||'')+'</td>'
       + '<td data-label="支付方式" contenteditable data-f="method">'+(r.method||'—')+'</td>'
       + '<td data-label="备注/订单号" contenteditable data-f="memo">'+(r.memo||'—')+'</td>'
@@ -465,7 +472,7 @@ $('searchBox').oninput = render;
 function delRec(id){ records = records.filter(r=>r.id!==id); save(); render(); }
 function showImg(src){ $('imgModalImg').src = src; $('imgModal').style.display='flex'; }
 function addManual(){
-  records.unshift({ id:Date.now()+'_'+Math.random().toString(36).slice(2,7), date:new Date().toISOString().slice(0,10), time:'', payee:'新记录', amount:0, direction:'支出', method:'', memo:'', orderNo:'', img:'' });
+  records.unshift({ id:Date.now()+'_'+Math.random().toString(36).slice(2,7), date:new Date().toISOString().slice(0,10), time:'', payee:'新记录', payer:'', amount:0, currency:'CNY', direction:'支出', method:'', memo:'', orderNo:'', img:'' });
   save(); render();
 }
 function clearAll(){
@@ -478,7 +485,7 @@ function clearAll(){
 function exportExcel(){
   const list = filtered();
   if(!list.length){ toast('没有可导出的数据'); return; }
-  const detail = list.map((r,i) => ({ '序号':i+1, '日期':r.date, '时间':r.time, '收款/付款方':r.payee, '金额(元)':+r.amount||0, '收/支':r.direction, '支付方式':r.method, '备注/订单号':r.memo, 'OCR置信度':r.conf||'' }));
+  const detail = list.map((r,i) => ({ '序号':i+1, '日期':r.date, '时间':r.time, '收款方':r.payee, '付款方':r.payer||'', '金额':+r.amount||0, '币种':r.currency||'CNY', '收/支':r.direction, '支付方式':r.method, '备注/订单号':r.memo, '识别方式':r.conf===undefined?'':(r.conf==='AI'?'AI':'OCR') }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), '支付明细');
   const byMonth = {};
