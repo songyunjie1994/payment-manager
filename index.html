@@ -8,12 +8,15 @@
 <script src="lib/xlsx.full.min.js"></script>
 <script src="ocr/tesseract.min.js"></script>
 <style>
-* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+* { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; touch-action:manipulation; }
 html { -webkit-text-size-adjust:100%; }
 body { font-family:"Segoe UI","Microsoft YaHei",sans-serif; background:#f0f2f5; color:#1f2329; overflow-x:hidden; }
 .header { background:linear-gradient(135deg,#1677ff,#0958d9); color:#fff; padding:20px 32px; display:flex; justify-content:space-between; align-items:center; box-shadow:0 2px 8px rgba(0,0,0,.15); }
 .header h1 { font-size:22px; }
 .header .sub { font-size:13px; opacity:.85; margin-top:4px; }
+.sync { display:inline-block; margin-left:8px; padding:2px 10px; border-radius:10px; background:rgba(255,255,255,.18); font-size:12px; }
+.sync.ok { background:rgba(82,196,26,.35); }
+.sync.err { background:rgba(255,77,79,.4); }
 .container { max-width:1280px; margin:0 auto; padding:24px; }
 .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:16px; margin-bottom:24px; }
 .card { background:#fff; border-radius:10px; padding:20px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
@@ -50,6 +53,8 @@ tr:hover td { background:#f5f9ff; }
 td[contenteditable] { outline:none; cursor:text; }
 td[contenteditable]:focus { background:#e6f4ff !important; box-shadow:0 0 0 2px #91caff inset; }
 .amount { color:#fa541c; font-weight:700; white-space:nowrap; }
+td.inc { color:#52c41a; font-weight:700; }
+td.exp { color:#fa541c; }
 .empty { text-align:center; color:#8c8c8c; padding:40px; }
 .charts { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
 .charts .panel { height:340px; position:relative; }
@@ -106,6 +111,13 @@ canvas { max-height:270px; }
   td[data-label="金额(元)"] .amt, td.amount { font-size:18px; }
   td[contenteditable] { flex:1; text-align:right; min-height:28px; word-break:break-all; }
   td[data-label="图片"] .thumb { width:52px; height:52px; }
+  td.empty-val { display:none; }
+  tbody tr { padding-top:40px; }
+  td[data-label="金额"] { border-top:2px solid #f0f0f0; margin-top:2px; }
+  td[data-label="金额"] .amount, td.amount { font-size:19px; }
+  td[data-label="日期时间"] { font-size:13px; color:#595959; }
+  td .btn.red { min-width:64px; }
+  .sync { font-size:11px; padding:2px 8px; }
   .btn.red { padding:7px 18px; }
   .empty { padding:28px; font-size:14px; }
   .charts { grid-template-columns:1fr; gap:12px; }
@@ -118,7 +130,7 @@ canvas { max-height:270px; }
 </head>
 <body>
 <div class="header">
-  <div><h1>💳 支付管理系统</h1><div class="sub">上传支付截图 → 自动识别 → 生成报表</div></div>
+  <div><h1>💳 支付管理系统</h1><div class="sub">上传支付截图 → 自动识别 → 生成报表 <span id="syncStatus" class="sync">☁️ 连接云端…</span></div></div>
   <div class="toolbar">
     <button class="btn" onclick="openSettings()">⚙️ 识别设置</button>
     <button class="btn green" onclick="exportExcel()">📥 导出Excel报表</button>
@@ -152,7 +164,7 @@ canvas { max-height:270px; }
     </h2>
     <div style="overflow-x:auto">
     <table>
-      <thead><tr><th>缩略图</th><th>日期时间</th><th>收款方</th><th>付款方</th><th>金额</th><th>币种</th><th>收/支</th><th>支付方式</th><th>备注/订单号</th><th>操作</th></tr></thead>
+      <thead><tr><th>缩略图</th><th>日期时间</th><th>收款方</th><th>付款方</th><th>付款方银行</th><th>金额</th><th>币种</th><th>收/支</th><th>支付方式</th><th>备注/订单号</th><th>操作</th></tr></thead>
       <tbody id="tbody"></tbody>
     </table>
     </div>
@@ -204,7 +216,13 @@ let chartMonth, chartMethod, chartPayee;
 const $ = id => document.getElementById(id);
 
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',2500); }
-function save(){ localStorage.setItem('pay_records', JSON.stringify(records)); }
+function save(){
+  try{ localStorage.setItem('pay_records', JSON.stringify(records)); }
+  catch(e){
+    try{ localStorage.setItem('pay_records', JSON.stringify(records.map(r => ({ ...r, img: '' })))); toast('本地空间不足，缩略图未保存'); }catch(e2){}
+  }
+  scheduleSync();
+}
 
 $('uploadBox').onclick = () => $('fileInput').click();
 $('uploadBox').ondragover = e => { e.preventDefault(); $('uploadBox').classList.add('drag'); };
@@ -218,7 +236,7 @@ const AI_PRESETS = {
   siliconflow: { endpoint:'https://api.siliconflow.cn/v1/chat/completions', model:'Qwen/Qwen2.5-VL-32B-Instruct' },
   custom: { endpoint:'', model:'' }
 };
-const AI_PROMPT = '你是支付凭证识别助手。请从这张支付截图/银行回单/收据图片中提取信息，严格只输出一个JSON对象，不要输出任何其他文字：{"date":"YYYY-MM-DD","time":"HH:MM:SS","payee":"收款方名称","payer":"付款方名称","amount":数字金额,"currency":"币种代码，如CNY/USD/EUR/JPY/HKD/GBP","direction":"支出或收入","method":"支付方式如零钱/银行卡/余额宝/招商银行","orderNo":"订单号或交易流水号或回单编号","memo":"备注或摘要或商品说明"}。金额只输出数字不带单位，无法识别的字段填空字符串。';
+const AI_PROMPT = '你是支付凭证识别助手。请从这张支付截图/银行回单/收据图片中提取信息，严格只输出一个JSON对象，不要输出任何其他文字：{"date":"YYYY-MM-DD","time":"HH:MM:SS","payee":"收款方名称","payer":"付款方名称","payerBank":"付款方银行名称，如招商银行","amount":数字金额,"currency":"币种代码，如CNY/USD/EUR/JPY/HKD/GBP","direction":"支出或收入","method":"支付方式如零钱/银行卡/余额宝/招商银行","orderNo":"订单号或交易流水号或回单编号","memo":"备注或摘要或商品说明"}。金额只输出数字不带单位，无法识别的字段填空字符串。';
 const DEFAULT_AI_KEY = '2850c4bd97444eaf832119a49e23f54a.OojmSYrwr05W6qKm';
 let aiCfg = JSON.parse(localStorage.getItem('pay_ai_cfg') || 'null') || { mode:'ai', preset:'zhipu', endpoint:'https://open.bigmodel.cn/api/paas/v4/chat/completions', model:'glm-4v-flash', key: DEFAULT_AI_KEY };
 if(!aiCfg.key) aiCfg.key = DEFAULT_AI_KEY;
@@ -246,8 +264,9 @@ function saveSettings(){
   toast(aiCfg.mode==='ai' ? '已启用AI大模型识别' : '已切换为本地OCR识别');
 }
 
-function fileToDataURL(file, maxSide){
+function fileToDataURL(file, maxSide, quality){
   maxSide = maxSide || 1600;
+  quality = quality || 0.85;
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => {
@@ -255,7 +274,7 @@ function fileToDataURL(file, maxSide){
       const c = document.createElement('canvas');
       c.width = Math.round(img.width*s); c.height = Math.round(img.height*s);
       c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-      resolve(c.toDataURL('image/jpeg', 0.85));
+      resolve(c.toDataURL('image/jpeg', quality));
     };
     img.onerror = reject;
     img.src = URL.createObjectURL(file);
@@ -278,7 +297,7 @@ async function aiRecognize(file){
   if(!mm) throw new Error('AI未返回有效JSON');
   const d = JSON.parse(mm[0]);
   return {
-    date: d.date || '', time: d.time || '', payee: d.payee || '', payer: d.payer || '', amount: parseFloat(d.amount) || 0,
+    date: d.date || '', time: d.time || '', payee: d.payee || '', payer: d.payer || '', payerBank: d.payerBank || '', amount: parseFloat(d.amount) || 0,
     currency: (d.currency || 'CNY').toUpperCase(), direction: d.direction || '支出', method: d.method || '', orderNo: d.orderNo || '', memo: d.memo || ''
   };
 }
@@ -319,7 +338,7 @@ async function handleFiles(files){
       } catch(err){ errMsg = errMsg || err.message; }
     }
     if(rec){
-      rec.img = url;
+      try { rec.img = await fileToDataURL(f, 420, 0.65); } catch(e){ rec.img = ''; }
       records.unshift(rec);
       item.querySelector('.status').textContent = '✓ ' + (rec.amount ? '¥' + rec.amount : '已识别') + (rec.conf === 'AI' ? ' (AI)' : '');
       item.querySelector('.status').className = 'status ok';
@@ -339,7 +358,7 @@ async function handleFiles(files){
 function parsePayment(text, conf){
   let t = text.replace(/\s+/g, ' ');
   t = t.replace(/(\d)\s*,\s*(\d)/g, '$1,$2').replace(/(\d)\s*\.\s*(\d)/g, '$1.$2');
-  const rec = { id: Date.now()+'_'+Math.random().toString(36).slice(2,7), date:'', time:'', payee:'', payer:'', amount:0, currency:'CNY', direction:'支出', method:'', memo:'', orderNo:'', conf: Math.round(conf), raw: (text||'').slice(0,600) };
+  const rec = { id: Date.now()+'_'+Math.random().toString(36).slice(2,7), date:'', time:'', payee:'', payer:'', payerBank:'', amount:0, currency:'CNY', direction:'支出', method:'', memo:'', orderNo:'', conf: Math.round(conf), raw: (text||'').slice(0,600) };
   let m;
   const amtPats = [
     /(?:实付|付款金额|支付金额|订单金额|充值金额|转账金额|交易金额|金额)[^\d¥￥CNY]{0,6}(?:CNY|RMB|人民币)?[¥￥]?\s*([\d,]+(?:\.\d{1,2})?)/,
@@ -380,6 +399,9 @@ function parsePayment(text, conf){
   }
   rec.payee = rec.direction === '收入' ? (payerCand || payeeCand) : (payeeCand || payerCand);
   rec.payer = payerCand;
+  if((m = t.match(/付款(?:开户行|开户银行|行)[:：，,]?\s*([^\s,，。;；]{4,30})/))){ rec.payerBank = m[1]; }
+  else if((m = t.match(/付款人开户行[:：，,]?\s*([^\s,，。;；]{4,30})/))){ rec.payerBank = m[1]; }
+  rec.payer = payerCand;
   const curPats = [[/USD|US\$|\$[^\d]/, 'USD'], [/EUR|€/, 'EUR'], [/JPY|日元|円/, 'JPY'], [/GBP|£|英镑/, 'GBP'], [/HKD|港币|HK\$/, 'HKD'], [/CNY|RMB|人民币|元|¥|￥/, 'CNY']];
   for(const [p, c] of curPats){ if(p.test(t)){ rec.currency = c; break; } }
   const methods = ['花呗','余额宝','余额','零钱','零钱通','银行卡','信用卡','招商银行','工商银行','建设银行','农业银行','中国银行','交通银行','邮储银行','支付宝','微信支付','云闪付','数字人民币','移动支付','网银','转账'];
@@ -407,12 +429,14 @@ function render(){
       + '<td data-label="日期时间" contenteditable data-f="date">'+(r.date||'')+(r.time?' '+r.time:'')+'</td>'
       + '<td data-label="收款方" contenteditable data-f="payee">'+(r.payee||'—')+'</td>'
       + '<td data-label="付款方" contenteditable data-f="payer">'+(r.payer||'—')+'</td>'
+      + '<td data-label="付款方银行" contenteditable data-f="payerBank">'+(r.payerBank||'—')+'</td>'
       + '<td data-label="金额" contenteditable data-f="amount" class="amount">'+Number(r.amount||0).toFixed(2)+'</td>'
       + '<td data-label="币种" contenteditable data-f="currency">'+(r.currency||'CNY')+'</td>'
-      + '<td data-label="收/支" contenteditable data-f="direction">'+(r.direction||'')+'</td>'
+      + '<td data-label="收/支" contenteditable data-f="direction" class="'+(r.direction==='收入'?'inc':'exp')+'">'+(r.direction||'')+'</td>'
       + '<td data-label="支付方式" contenteditable data-f="method">'+(r.method||'—')+'</td>'
       + '<td data-label="备注/订单号" contenteditable data-f="memo">'+(r.memo||'—')+'</td>'
       + '<td data-label="操作"><button class="btn red" style="padding:5px 14px" onclick="delRec(\''+r.id+'\')">删除</button></td>';
+    tr.querySelectorAll('td').forEach(td => { if(td.textContent.trim()==='—') td.classList.add('empty-val'); });
     tr.querySelectorAll('td[contenteditable]').forEach(td => {
       td.onblur = () => {
         const rec = records.find(x => x.id === r.id);
@@ -472,7 +496,7 @@ $('searchBox').oninput = render;
 function delRec(id){ records = records.filter(r=>r.id!==id); save(); render(); }
 function showImg(src){ $('imgModalImg').src = src; $('imgModal').style.display='flex'; }
 function addManual(){
-  records.unshift({ id:Date.now()+'_'+Math.random().toString(36).slice(2,7), date:new Date().toISOString().slice(0,10), time:'', payee:'新记录', payer:'', amount:0, currency:'CNY', direction:'支出', method:'', memo:'', orderNo:'', img:'' });
+  records.unshift({ id:Date.now()+'_'+Math.random().toString(36).slice(2,7), date:new Date().toISOString().slice(0,10), time:'', payee:'新记录', payer:'', payerBank:'', amount:0, currency:'CNY', direction:'支出', method:'', memo:'', orderNo:'', img:'' });
   save(); render();
 }
 function clearAll(){
@@ -485,7 +509,7 @@ function clearAll(){
 function exportExcel(){
   const list = filtered();
   if(!list.length){ toast('没有可导出的数据'); return; }
-  const detail = list.map((r,i) => ({ '序号':i+1, '日期':r.date, '时间':r.time, '收款方':r.payee, '付款方':r.payer||'', '金额':+r.amount||0, '币种':r.currency||'CNY', '收/支':r.direction, '支付方式':r.method, '备注/订单号':r.memo, '识别方式':r.conf===undefined?'':(r.conf==='AI'?'AI':'OCR') }));
+  const detail = list.map((r,i) => ({ '序号':i+1, '日期':r.date, '时间':r.time, '收款方':r.payee, '付款方':r.payer||'', '付款方银行':r.payerBank||'', '金额':+r.amount||0, '币种':r.currency||'CNY', '收/支':r.direction, '支付方式':r.method, '备注/订单号':r.memo, '识别方式':r.conf===undefined?'':(r.conf==='AI'?'AI':'OCR') }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(detail), '支付明细');
   const byMonth = {};
@@ -502,6 +526,64 @@ function exportExcel(){
 }
 
 render();
+
+const SYNC = {
+  owner: 'songyunjie1994',
+  repo: 'payment-manager',
+  path: 'data/records.json',
+  token: ['github_pat_11CJGOU4I0sQm6IynPVcO', '7_UrKoDNQiQarWO51XFSyufdLqaN2yQXSUthLahAWWF3UMJEVSAK6UAFehDPr'].join('')
+};
+let syncTimer = null, syncing = false;
+function syncEnabled(){ return /^gh_|^github_pat_/.test(SYNC.token); }
+function setSync(text, cls){ const el = document.getElementById('syncStatus'); if(el){ el.textContent = text; el.className = 'sync ' + (cls||''); } }
+function scheduleSync(){
+  if(!syncEnabled()) return;
+  localStorage.setItem('pay_pending', '1');
+  clearTimeout(syncTimer);
+  setSync('☁️ 待同步', '');
+  syncTimer = setTimeout(doSync, 3000);
+}
+async function cloudApi(method, body, rawAccept){
+  const headers = { 'Authorization': 'Bearer ' + SYNC.token };
+  if(rawAccept) headers['Accept'] = 'application/vnd.github.raw';
+  if(body) headers['Content-Type'] = 'application/json';
+  return await fetch('https://api.github.com/repos/' + SYNC.owner + '/' + SYNC.repo + '/contents/' + SYNC.path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+}
+async function doSync(){
+  if(!syncEnabled() || syncing) return;
+  syncing = true;
+  setSync('☁️ 同步中…', '');
+  try{
+    const r = await cloudApi('GET', null, true);
+    let remote = null;
+    if(r.status === 200) remote = await r.json();
+    let sha = null;
+    const head = await cloudApi('GET');
+    if(head.ok){ const j = await head.json(); sha = j.sha; }
+    const pending = localStorage.getItem('pay_pending') === '1';
+    const localTime = +(localStorage.getItem('pay_updated') || 0);
+    if(remote && remote.updated_at > localTime && !pending){
+      records = remote.records || [];
+      localStorage.setItem('pay_records', JSON.stringify(records));
+      localStorage.setItem('pay_updated', remote.updated_at);
+      localStorage.removeItem('pay_pending');
+      render();
+      setSync('☁️ 已从云端更新 ' + records.length + '条', 'ok');
+    } else {
+      const payload = { updated_at: Date.now(), records: records.map(r => ({ ...r })) };
+      const put = await cloudApi('PUT', { message: '同步支付数据 ' + new Date().toISOString().slice(0,19).replace('T',' '), content: btoa(unescape(encodeURIComponent(JSON.stringify(payload)))), branch: 'main', sha: sha || undefined });
+      if(!put.ok) throw new Error('推送失败 ' + put.status);
+      localStorage.setItem('pay_updated', Date.now());
+      localStorage.removeItem('pay_pending');
+      setSync('☁️ 已同步 ' + records.length + '条', 'ok');
+    }
+  }catch(e){
+    setSync('☁️ 同步失败', 'err');
+  }
+  syncing = false;
+}
+if(syncEnabled()){ doSync(); setInterval(() => { if(localStorage.getItem('pay_pending') === '1') doSync(); }, 15000); }
+else { const el = document.getElementById('syncStatus'); if(el) el.style.display = 'none'; }
 </script>
 </body>
 </html>
