@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>支付管理系统</title>
-<script src="lib/chart.umd.min.js"></script>
 <script src="lib/xlsx.full.min.js"></script>
 <script src="ocr/tesseract.min.js"></script>
 <style>
@@ -56,10 +55,6 @@ td[contenteditable]:focus { background:#e6f4ff !important; box-shadow:0 0 0 2px 
 td.inc { color:#52c41a; font-weight:700; }
 td.exp { color:#fa541c; }
 .empty { text-align:center; color:#8c8c8c; padding:40px; }
-.charts { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
-.charts .panel { height:340px; position:relative; }
-.charts .panel.wide { grid-column:1 / -1; }
-canvas { max-height:270px; }
 .thumb { width:36px; height:36px; object-fit:cover; border-radius:4px; cursor:pointer; }
 .toast { position:fixed; top:20px; left:50%; transform:translateX(-50%); background:#fff; padding:10px 20px; border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,.15); font-size:14px; display:none; z-index:99; }
 .settings-modal { position:fixed; inset:0; background:rgba(0,0,0,.5); display:none; align-items:center; justify-content:center; z-index:97; padding:16px; }
@@ -75,7 +70,7 @@ canvas { max-height:270px; }
 .mode-group .mode-btn.active { border-color:#1677ff; background:#f0f7ff; color:#1677ff; font-weight:600; }
 .img-modal { position:fixed; inset:0; background:rgba(0,0,0,.7); display:none; align-items:center; justify-content:center; z-index:98; }
 .img-modal img { max-width:92%; max-height:92%; border-radius:8px; }
-@media (max-width:768px){ .charts{grid-template-columns:1fr;} .container{padding:12px;} }
+@media (max-width:768px){ .container{padding:12px;} }
 @media (max-width:768px){
   .header { flex-direction:column; align-items:stretch; padding:14px 16px; padding-top:calc(14px + env(safe-area-inset-top)); gap:12px; }
   .header h1 { font-size:19px; }
@@ -120,9 +115,6 @@ canvas { max-height:270px; }
   .sync { font-size:11px; padding:2px 8px; }
   .btn.red { padding:7px 18px; }
   .empty { padding:28px; font-size:14px; }
-  .charts { grid-template-columns:1fr; gap:12px; }
-  .charts .panel { height:280px; }
-  canvas { max-height:210px; }
   .toast { width:88%; text-align:center; top:auto; bottom:calc(24px + env(safe-area-inset-bottom)); }
   .img-modal img { max-width:96%; max-height:80%; }
 }
@@ -170,12 +162,6 @@ canvas { max-height:270px; }
     </div>
     <div class="empty" id="emptyTip">暂无数据，先上传一张支付截图试试</div>
   </div>
-
-  <div class="charts">
-    <div class="panel wide"><h2>📈 月度支付趋势</h2><canvas id="chartMonth"></canvas></div>
-    <div class="panel"><h2>🥧 支付方式分布</h2><canvas id="chartMethod"></canvas></div>
-    <div class="panel"><h2>🏆 收款方 Top8</h2><canvas id="chartPayee"></canvas></div>
-  </div>
 </div>
 <div class="settings-modal" id="settingsModal">
   <div class="settings-box">
@@ -212,7 +198,6 @@ canvas { max-height:270px; }
 
 <script>
 let records = JSON.parse(localStorage.getItem('pay_records') || '[]');
-let chartMonth, chartMethod, chartPayee;
 const $ = id => document.getElementById(id);
 
 function toast(msg){ const t=$('toast'); t.textContent=msg; t.style.display='block'; setTimeout(()=>t.style.display='none',2500); }
@@ -451,7 +436,7 @@ function render(){
     tb.appendChild(tr);
   });
   $('emptyTip').style.display = list.length ? 'none' : 'block';
-  updateStats(); updateFilters(); drawCharts();
+  updateStats(); updateFilters();
 }
 
 function updateStats(){
@@ -470,24 +455,6 @@ function updateFilters(){
   const methods = [...new Set(records.map(r=>r.method).filter(Boolean))];
   const fmd = $('filterMethod'), seld = fmd.value;
   fmd.innerHTML = '<option value="">全部方式</option>' + methods.map(m=>'<option'+(m===seld?' selected':'')+'>'+m+'</option>').join('');
-}
-
-function drawCharts(){
-  const byMonth = {};
-  filtered().forEach(r => { const k = monthKey(r)||'未知'; byMonth[k] = (byMonth[k]||0) + (+r.amount||0); });
-  const mk = Object.keys(byMonth).sort();
-  const cm = $('chartMonth');
-  if(chartMonth) chartMonth.destroy();
-  chartMonth = new Chart(cm, { type:'line', data:{ labels:mk, datasets:[{ label:'支付金额(元)', data:mk.map(k=>byMonth[k].toFixed(2)), borderColor:'#1677ff', backgroundColor:'rgba(22,119,255,.15)', fill:true, tension:.3 }]}, options:{ maintainAspectRatio:false } });
-  const byMethod = {};
-  filtered().forEach(r => { const k = r.method||'未识别'; byMethod[k] = (byMethod[k]||0) + (+r.amount||0); });
-  if(chartMethod) chartMethod.destroy();
-  chartMethod = new Chart($('chartMethod'), { type:'doughnut', data:{ labels:Object.keys(byMethod), datasets:[{ data:Object.values(byMethod).map(v=>+v.toFixed(2)), backgroundColor:['#1677ff','#52c41a','#faad14','#fa541c','#722ed1','#13c2c2','#eb2f96','#8c8c8c'] }]}, options:{ maintainAspectRatio:false } });
-  const byPayee = {};
-  filtered().forEach(r => { const k = r.payee||'未识别'; byPayee[k] = (byPayee[k]||0) + (+r.amount||0); });
-  const top = Object.entries(byPayee).sort((a,b)=>b[1]-a[1]).slice(0,8);
-  if(chartPayee) chartPayee.destroy();
-  chartPayee = new Chart($('chartPayee'), { type:'bar', data:{ labels:top.map(e=>e[0]), datasets:[{ label:'金额(元)', data:top.map(e=>e[1].toFixed(2)), backgroundColor:'#1677ff' }]}, options:{ maintainAspectRatio:false, indexAxis:'y' } });
 }
 
 ['filterMonth','filterMethod'].forEach(id => $(id).onchange = render);
